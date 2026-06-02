@@ -584,6 +584,8 @@ function escHtml(str) {
 }
 
 clearBtn.addEventListener("click", () => {
+  clearTimeout(phraseTimer);
+  accumulated = "";
   entriesEl.innerHTML = "";
   history = [];
   emptyState.style.display = "";
@@ -626,8 +628,25 @@ if (!SpeechRecognition) {
   micBtn.style.opacity = "0.4";
 }
 
-let recognition = null;
-let isListening = false;
+let recognition  = null;
+let isListening  = false;
+let accumulated  = "";   // finals buffer — sent after PAUSE_MS of silence
+let phraseTimer  = null;
+
+const PAUSE_MS       = 1500;  // silence after which we treat speech as a complete phrase
+const MAX_PHRASE_LEN = 300;   // force-send if the buffer reaches this many chars
+
+function sendPhrase() {
+  clearTimeout(phraseTimer);
+  phraseTimer = null;
+  const phrase = accumulated.trim();
+  accumulated  = "";
+  interimWrap.classList.remove("visible");
+  interimText.textContent = "";
+  if (!phrase) return;
+  const id = addEntry(phrase);
+  translate(phrase, id);
+}
 
 function buildRecognition() {
   const r = new SpeechRecognition();
@@ -646,24 +665,31 @@ function buildRecognition() {
     let interim = "";
 
     for (let i = event.resultIndex; i < event.results.length; i++) {
-      const transcript = event.results[i][0].transcript;
+      const t = event.results[i][0].transcript;
       if (event.results[i].isFinal) {
-        const text = transcript.trim();
-        if (text) {
-          interimWrap.classList.remove("visible");
-          interimText.textContent = "";
-          const id = addEntry(text);
-          translate(text, id);
-        }
+        accumulated += (accumulated ? " " : "") + t.trim();
       } else {
-        interim += transcript;
+        interim += t;
       }
     }
 
-    if (interim) {
-      interimText.textContent = interim;
+    // Show everything heard so far in the live indicator
+    const display = accumulated + (interim ? (accumulated ? " " : "") + interim : "");
+    if (display) {
+      interimText.textContent = display;
       interimWrap.classList.add("visible");
       scrollToBottom();
+    }
+
+    if (accumulated) {
+      // Force-send on long phrases so we don't wait forever mid-speech
+      if (accumulated.length >= MAX_PHRASE_LEN) {
+        sendPhrase();
+        return;
+      }
+      // Otherwise wait for a real pause
+      clearTimeout(phraseTimer);
+      phraseTimer = setTimeout(sendPhrase, PAUSE_MS);
     }
   };
 
@@ -679,12 +705,13 @@ function buildRecognition() {
 
   r.onend = () => {
     if (isListening) {
-      // Auto-restart — browser stops after silence
+      // Flush anything accumulated before the restart gap
+      if (accumulated) sendPhrase();
       try { r.start(); } catch (_) {}
     } else {
       micBtn.classList.remove("listening");
       interimWrap.classList.remove("visible");
-      statusText.textContent = "Stopped";
+      statusText.textContent = "Ready";
     }
   };
 
@@ -693,6 +720,7 @@ function buildRecognition() {
 
 function startListening() {
   if (!SpeechRecognition) return;
+  accumulated = "";
   isListening = true;
   recognition = buildRecognition();
   recognition.start();
@@ -700,6 +728,8 @@ function startListening() {
 
 function stopListening() {
   isListening = false;
+  clearTimeout(phraseTimer);
+  if (accumulated) sendPhrase();   // flush anything not yet sent
   if (recognition) {
     try { recognition.stop(); } catch (_) {}
     recognition = null;
