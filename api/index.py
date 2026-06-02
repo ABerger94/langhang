@@ -5,7 +5,10 @@ import anthropic
 # Vercel runs this from the api/ directory — templates live one level up
 template_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "templates"))
 app = Flask(__name__, template_folder=template_dir)
-client = anthropic.Anthropic()
+try:
+    client = anthropic.Anthropic()
+except Exception:
+    client = None
 
 SYSTEM_PROMPT = """You are a real-time conversation translator for live speech. Output ONLY the translation — no explanations, no quotes, no metadata.
 
@@ -53,11 +56,16 @@ def translate():
         "content": f"Translate from {source_lang} to {target_lang}: {text}",
     })
 
-    response = client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=500,
-        system=SYSTEM_PROMPT,
-        messages=messages,
-    )
+    if client is None:
+        return jsonify({"error": "ANTHROPIC_API_KEY is not set. Add it to your Vercel project → Settings → Environment Variables, then redeploy."}), 500
 
-    return jsonify({"translation": response.content[0].text.strip()})
+    try:
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            system=SYSTEM_PROMPT,
+            messages=messages,
+        )
+        return jsonify({"translation": response.content[0].text.strip()})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500

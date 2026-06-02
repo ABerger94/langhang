@@ -571,13 +571,16 @@ async function translate(text, entryId) {
       }),
     });
 
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
+    if (!res.ok) {
+      updateEntryTranslation(entryId, data.error || `Server error (${res.status})`, true);
+      return;
+    }
     const xlat = data.translation || "(no translation)";
     updateEntryTranslation(entryId, xlat, false);
     history.push({ original: text, translation: xlat });
   } catch (err) {
-    updateEntryTranslation(entryId, "Translation failed — check server logs.", true);
+    updateEntryTranslation(entryId, `Network error: ${err.message}`, true);
   }
 }
 
