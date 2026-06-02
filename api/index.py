@@ -1,14 +1,10 @@
 import os
 from flask import Flask, render_template, request, jsonify
 import anthropic
+from openai import OpenAI
 
-# Vercel runs this from the api/ directory — templates live one level up
 template_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "templates"))
 app = Flask(__name__, template_folder=template_dir)
-try:
-    client = anthropic.Anthropic()
-except Exception:
-    client = None
 
 SYSTEM_PROMPT = """You are a live conversation interpreter — like a professional interpreter whispering in someone's ear during a real conversation.
 
@@ -32,6 +28,26 @@ Argentine Spanish guidance:
 - "la concha de tu madre" / "la puta madre" — match the expletive intensity in the target language, don't translate literally
 - Lunfardo varies wildly — always translate the *feeling and intensity*, never the literal words"""
 
+MODELS = {
+    "claude-sonnet-4-6":         {"provider": "anthropic", "env": "ANTHROPIC_API_KEY"},
+    "claude-haiku-4-5-20251001": {"provider": "anthropic", "env": "ANTHROPIC_API_KEY"},
+    "gpt-4o":                    {"provider": "openai",    "env": "OPENAI_API_KEY"},
+    "gpt-4o-mini":               {"provider": "openai",    "env": "OPENAI_API_KEY"},
+    "llama-3.3-70b-versatile":   {"provider": "groq",      "env": "GROQ_API_KEY"},
+    "llama-3.1-8b-instant":      {"provider": "groq",      "env": "GROQ_API_KEY"},
+    "gemma2-9b-it":              {"provider": "groq",      "env": "GROQ_API_KEY"},
+}
+
+
+def build_context_messages(context, source_lang, target_lang, text):
+    """Shared alternating-turn context for all providers."""
+    msgs = []
+    for entry in context[-4:]:
+        msgs.append({"role": "user",      "content": f"[{source_lang}] {entry['original']}"})
+        msgs.append({"role": "assistant", "content": entry["translation"]})
+    msgs.append({"role": "user", "content": f"Translate from {source_lang} to {target_lang}: {text}"})
+    return msgs
+
 
 @app.route("/")
 def index():
@@ -40,34 +56,50 @@ def index():
 
 @app.route("/translate", methods=["POST"])
 def translate():
-    data = request.get_json()
-    text = (data.get("text") or "").strip()
-    source_lang = data.get("source_lang") or "Argentine Spanish"
-    target_lang = data.get("target_lang") or "English"
-    context = data.get("context") or []
+    data        = request.get_json()
+    text        = (data.get("text")        or "").strip()
+    source_lang =  data.get("source_lang") or "Argentine Spanish"
+    target_lang =  data.get("target_lang") or "English"
+    context     =  data.get("context")     or []
+    model_id    =  data.get("model")       or "claude-sonnet-4-6"
 
     if not text:
         return jsonify({"translation": ""})
 
-    messages = []
-    for entry in context[-4:]:
-        messages.append({"role": "user", "content": f"[{source_lang}] {entry['original']}"})
-        messages.append({"role": "assistant", "content": entry["translation"]})
-    messages.append({
-        "role": "user",
-        "content": f"Translate from {source_lang} to {target_lang}: {text}",
-    })
+    model_info = MODELS.get(model_id)
+    if not model_info:
+        return jsonify({"error": f"Unknown model '{model_id}'."}), 400
 
-    if client is None:
-        return jsonify({"error": "ANTHROPIC_API_KEY is not set. Add it to your Vercel project → Settings → Environment Variables, then redeploy."}), 500
+    api_key = os.environ.get(model_info["env"])
+    if not api_key:
+        return jsonify({"error": f"{model_info['env']} is not set. Add it in Vercel → Settings → Environment Variables, then redeploy."}), 500
+
+    context_msgs = build_context_messages(context, source_lang, target_lang, text)
 
     try:
-        response = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=500,
-            system=SYSTEM_PROMPT,
-            messages=messages,
-        )
-        return jsonify({"translation": response.content[0].text.strip()})
+        provider = model_info["provider"]
+
+        if provider == "anthropic":
+            client = anthropic.Anthropic(api_key=api_key)
+            resp = client.messages.create(
+                model=model_id,
+                max_tokens=500,
+                system=SYSTEM_PROMPT,
+                messages=context_msgs,
+            )
+            translation = resp.content[0].text.strip()
+
+        else:
+            base_url = "https://api.groq.com/openai/v1" if provider == "groq" else None
+            client = OpenAI(api_key=api_key, **({"base_url": base_url} if base_url else {}))
+            resp = client.chat.completions.create(
+                model=model_id,
+                max_tokens=500,
+                messages=[{"role": "system", "content": SYSTEM_PROMPT}, *context_msgs],
+            )
+            translation = resp.choices[0].message.content.strip()
+
+        return jsonify({"translation": translation})
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500

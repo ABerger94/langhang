@@ -1,9 +1,9 @@
+import os
 from flask import Flask, render_template, request, jsonify
 import anthropic
-import os
+from openai import OpenAI
 
 app = Flask(__name__)
-client = anthropic.Anthropic()
 
 SYSTEM_PROMPT = """You are a live conversation interpreter — like a professional interpreter whispering in someone's ear during a real conversation.
 
@@ -27,6 +27,25 @@ Argentine Spanish guidance:
 - "la concha de tu madre" / "la puta madre" — match the expletive intensity in the target language, don't translate literally
 - Lunfardo varies wildly — always translate the *feeling and intensity*, never the literal words"""
 
+MODELS = {
+    "claude-sonnet-4-6":         {"provider": "anthropic", "env": "ANTHROPIC_API_KEY"},
+    "claude-haiku-4-5-20251001": {"provider": "anthropic", "env": "ANTHROPIC_API_KEY"},
+    "gpt-4o":                    {"provider": "openai",    "env": "OPENAI_API_KEY"},
+    "gpt-4o-mini":               {"provider": "openai",    "env": "OPENAI_API_KEY"},
+    "llama-3.3-70b-versatile":   {"provider": "groq",      "env": "GROQ_API_KEY"},
+    "llama-3.1-8b-instant":      {"provider": "groq",      "env": "GROQ_API_KEY"},
+    "gemma2-9b-it":              {"provider": "groq",      "env": "GROQ_API_KEY"},
+}
+
+
+def build_context_messages(context, source_lang, target_lang, text):
+    msgs = []
+    for entry in context[-4:]:
+        msgs.append({"role": "user",      "content": f"[{source_lang}] {entry['original']}"})
+        msgs.append({"role": "assistant", "content": entry["translation"]})
+    msgs.append({"role": "user", "content": f"Translate from {source_lang} to {target_lang}: {text}"})
+    return msgs
+
 
 @app.route("/")
 def index():
@@ -35,41 +54,54 @@ def index():
 
 @app.route("/translate", methods=["POST"])
 def translate():
-    data = request.get_json()
-    text = (data.get("text") or "").strip()
-    source_lang = data.get("source_lang") or "Argentine Spanish"
-    target_lang = data.get("target_lang") or "English"
-    context = data.get("context") or []
+    data        = request.get_json()
+    text        = (data.get("text")        or "").strip()
+    source_lang =  data.get("source_lang") or "Argentine Spanish"
+    target_lang =  data.get("target_lang") or "English"
+    context     =  data.get("context")     or []
+    model_id    =  data.get("model")       or "claude-sonnet-4-6"
 
     if not text:
         return jsonify({"translation": ""})
 
-    # Build alternating user/assistant context from prior exchanges
-    messages = []
-    for entry in context[-4:]:
-        messages.append({
-            "role": "user",
-            "content": f"[{source_lang}] {entry['original']}"
-        })
-        messages.append({
-            "role": "assistant",
-            "content": entry["translation"]
-        })
-    messages.append({
-        "role": "user",
-        "content": f"Translate from {source_lang} to {target_lang}: {text}"
-    })
+    model_info = MODELS.get(model_id)
+    if not model_info:
+        return jsonify({"error": f"Unknown model '{model_id}'."}), 400
 
-    response = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=500,
-        system=SYSTEM_PROMPT,
-        messages=messages,
-    )
+    api_key = os.environ.get(model_info["env"])
+    if not api_key:
+        return jsonify({"error": f"{model_info['env']} is not set."}), 500
 
-    return jsonify({"translation": response.content[0].text.strip()})
+    context_msgs = build_context_messages(context, source_lang, target_lang, text)
+
+    try:
+        provider = model_info["provider"]
+
+        if provider == "anthropic":
+            client = anthropic.Anthropic(api_key=api_key)
+            resp = client.messages.create(
+                model=model_id,
+                max_tokens=500,
+                system=SYSTEM_PROMPT,
+                messages=context_msgs,
+            )
+            translation = resp.content[0].text.strip()
+
+        else:
+            base_url = "https://api.groq.com/openai/v1" if provider == "groq" else None
+            client = OpenAI(api_key=api_key, **({"base_url": base_url} if base_url else {}))
+            resp = client.chat.completions.create(
+                model=model_id,
+                max_tokens=500,
+                messages=[{"role": "system", "content": SYSTEM_PROMPT}, *context_msgs],
+            )
+            translation = resp.choices[0].message.content.strip()
+
+        return jsonify({"translation": translation})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(debug=True, host="0.0.0.0", port=port)
+    app.run(debug=True, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))

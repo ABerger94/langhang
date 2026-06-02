@@ -107,6 +107,21 @@
       color: var(--accent);
     }
 
+    .model-sep {
+      width: 1px;
+      height: 22px;
+      background: var(--border);
+      flex-shrink: 0;
+    }
+
+    select.model-sel {
+      min-width: 160px;
+      border-color: rgba(108,143,255,0.35);
+      color: var(--accent);
+    }
+
+    select.model-sel:focus { outline: none; border-color: var(--accent); }
+
     /* ── Main conversation ───────────────────────── */
     main {
       flex: 1;
@@ -379,6 +394,22 @@
     <select id="sourceLang" title="Listening language"></select>
     <button class="swap-btn" id="swapBtn" title="Swap languages">⇄</button>
     <select id="targetLang" title="Translate into"></select>
+    <div class="model-sep"></div>
+    <select id="modelSel" class="model-sel" title="AI model">
+      <optgroup label="Anthropic">
+        <option value="claude-sonnet-4-6" selected>Claude Sonnet</option>
+        <option value="claude-haiku-4-5-20251001">Claude Haiku (fast)</option>
+      </optgroup>
+      <optgroup label="OpenAI">
+        <option value="gpt-4o">GPT-4o</option>
+        <option value="gpt-4o-mini">GPT-4o mini</option>
+      </optgroup>
+      <optgroup label="Groq">
+        <option value="llama-3.3-70b-versatile">Llama 3.3 70B</option>
+        <option value="llama-3.1-8b-instant">Llama 3.1 8B (fast)</option>
+        <option value="gemma2-9b-it">Gemma 2 9B</option>
+      </optgroup>
+    </select>
   </div>
 </header>
 
@@ -459,6 +490,7 @@ const LANGUAGES = [
 // ── DOM refs ─────────────────────────────────────────────────────────────────
 const sourceSel    = document.getElementById("sourceLang");
 const targetSel    = document.getElementById("targetLang");
+const modelSel     = document.getElementById("modelSel");
 const swapBtn      = document.getElementById("swapBtn");
 const micBtn       = document.getElementById("micBtn");
 const clearBtn     = document.getElementById("clearBtn");
@@ -568,6 +600,7 @@ async function translate(text, entryId) {
         source_lang: sourceLang().xlat,
         target_lang: targetLang().xlat,
         context: history.slice(-4),
+        model: modelSel.value,
       }),
     });
 
